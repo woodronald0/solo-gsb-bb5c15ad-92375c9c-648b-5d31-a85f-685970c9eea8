@@ -1,4 +1,5 @@
 import type {
+  AliasTable,
   AuditReport,
   ExportResult,
   JobState,
@@ -28,20 +29,20 @@ async function req<T>(url: string, init?: RequestInit): Promise<T> {
 export const api = {
   presets: () => req<{ presets: Preset[] }>('/api/presets'),
   getJob: () => req<{ job: JobState | null }>('/api/job'),
-  saveJob: (vtt: string, rules: MaskRule[], revertedKeys: string[]) =>
+  saveJob: (vtt: string, rules: MaskRule[], revertedKeys: string[], aliases: AliasTable) =>
     req<{ job: JobState }>('/api/job', {
       method: 'PUT',
-      body: JSON.stringify({ vtt, rules, revertedKeys }),
+      body: JSON.stringify({ vtt, rules, revertedKeys, aliases }),
     }),
-  preview: (vtt: string, rules: MaskRule[], revertedKeys: string[]) =>
+  preview: (vtt: string, rules: MaskRule[], revertedKeys: string[], aliases: AliasTable) =>
     req<PreviewResult>('/api/preview', {
       method: 'POST',
-      body: JSON.stringify({ vtt, rules, revertedKeys }),
+      body: JSON.stringify({ vtt, rules, revertedKeys, aliases }),
     }),
-  export: (vtt: string, rules: MaskRule[], revertedKeys: string[]) =>
+  export: (vtt: string, rules: MaskRule[], revertedKeys: string[], aliases: AliasTable) =>
     req<ExportResult>('/api/export', {
       method: 'POST',
-      body: JSON.stringify({ vtt, rules, revertedKeys }),
+      body: JSON.stringify({ vtt, rules, revertedKeys, aliases }),
     }),
 };
 

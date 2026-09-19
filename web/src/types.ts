@@ -1,11 +1,32 @@
+export type ReplaceMode = 'template' | 'alias';
+
 export interface MaskRule {
   id: string;
   name: string;
   pattern: string;
   flags: string;
   replacement: string;
+  /** 替换模式，缺省为 template（固定模板） */
+  mode?: ReplaceMode;
+  /** 化名模式的编号前缀（缺省「用户」） */
+  aliasPrefix?: string;
   priority: number;
   enabled: boolean;
+}
+
+/** 稳定化名映射条目：首次命中时建立，持久化，编号不重排 */
+export interface AliasEntry {
+  /** 实体键：规则 ID + 经 Unicode NFKC 并去首尾空白后的原文 */
+  entityKey: string;
+  ruleId: string;
+  source: string;
+  seq: number;
+  alias: string;
+}
+
+export interface AliasTable {
+  nextSeq: Record<string, number>;
+  entries: AliasEntry[];
 }
 
 export interface Hit {
@@ -17,6 +38,8 @@ export interface Hit {
   end: number;
   match: string;
   replacement: string;
+  /** 化名模式命中：所属实体键 */
+  entityKey?: string;
   reverted: boolean;
 }
 
@@ -52,6 +75,8 @@ export interface PreviewResult {
   suppressedHits: number;
   cues: CueHit[];
   parseErrors: string[];
+  /** 本次预览后的完整化名表（含新建映射） */
+  aliases: AliasTable;
 }
 
 export interface JobState {
@@ -59,6 +84,7 @@ export interface JobState {
   vtt: string;
   rules: MaskRule[];
   revertedKeys: string[];
+  aliases: AliasTable;
   updatedAt: string;
 }
 
@@ -71,6 +97,9 @@ export interface AuditRecord {
   replacement: string;
   status: 'applied' | 'reverted' | 'suppressed';
   suppressedBy?: { id: string; name: string };
+  /** 化名模式：实体键与最终化名 */
+  entityKey?: string;
+  alias?: string;
 }
 
 export interface AuditReport {
@@ -79,6 +108,8 @@ export interface AuditReport {
   generatedAt: string;
   source: { sha256: string; length: number; cueCount: number };
   rules: MaskRule[];
+  /** 导出时的完整化名映射表 */
+  aliases: AliasEntry[];
   stats: {
     totalHits: number;
     appliedHits: number;
@@ -92,6 +123,7 @@ export interface ExportResult {
   vtt: string;
   audit: AuditReport;
   jobId: string;
+  aliases: AliasTable;
 }
 
 export interface Preset {

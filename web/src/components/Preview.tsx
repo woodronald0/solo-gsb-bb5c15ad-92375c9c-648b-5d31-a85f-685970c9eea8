@@ -38,7 +38,7 @@ function CueCard({ cue, onToggleHit }: { cue: CueHit; onToggleHit: (k: string) =
             <span
               key={i}
               className={`hit ${s.hit.reverted ? 'hit-reverted' : 'hit-applied'}`}
-              title={`${s.hit.ruleName}（优先级 ${s.hit.priority}）\n原文：${s.hit.match}\n替换：${s.hit.replacement}`}
+              title={`${s.hit.ruleName}（优先级 ${s.hit.priority}）\n原文：${s.hit.match}\n替换：${s.hit.replacement}${s.hit.entityKey ? `\n实体键：${s.hit.entityKey}` : ''}`}
             >
               <span className="hit-label">{s.hit.ruleName}</span>
               {s.hit.reverted ? (

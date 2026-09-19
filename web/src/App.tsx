@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './api';
-import type { ExportResult, MaskRule, Preset, PreviewResult } from './types';
-import { uid } from './utils';
+import type { AliasTable, ExportResult, MaskRule, Preset, PreviewResult } from './types';
+import { emptyAliasTable, uid, unionAliasTables } from './utils';
 import { SAMPLE_VTT } from './sample';
 import { VttInput } from './components/VttInput';
 import { RulesPanel } from './components/RulesPanel';
+import { AliasPanel } from './components/AliasPanel';
 import { Preview } from './components/Preview';
 import { ExportModal } from './components/ExportModal';
 
@@ -14,6 +15,7 @@ export default function App() {
   const [vtt, setVtt] = useState('');
   const [rules, setRules] = useState<MaskRule[]>([]);
   const [revertedKeys, setRevertedKeys] = useState<string[]>([]);
+  const [aliases, setAliases] = useState<AliasTable>(emptyAliasTable());
   const [presets, setPresets] = useState<Preset[]>([]);
   const [preview, setPreview] = useState<PreviewResult | null>(null);
   const [exportData, setExportData] = useState<ExportResult | null>(null);
@@ -42,6 +44,7 @@ export default function App() {
           setVtt(job.vtt);
           setRules(job.rules);
           setRevertedKeys(job.revertedKeys ?? []);
+          setAliases(job.aliases ?? emptyAliasTable());
           setUpdatedAt(job.updatedAt);
         } else {
           // 首次使用：加载预设（全部预置，按 enabled 字段决定启用）
@@ -58,7 +61,7 @@ export default function App() {
     };
   }, []);
 
-  /* ------------- 防抖计算预览（300ms） ------------- */
+  /* ------------- 防抖计算预览（300ms），并回收新建的稳定化名映射 ------------- */
   useEffect(() => {
     if (!hydrated) return;
     if (previewTimer.current) clearTimeout(previewTimer.current);
@@ -69,7 +72,9 @@ export default function App() {
     setLoading(true);
     previewTimer.current = setTimeout(async () => {
       try {
-        const p = await api.preview(vtt, rules, revertedKeys);
+        const p = await api.preview(vtt, rules, revertedKeys, aliases);
+        // 服务端只追加映射；并集合并保留本地手动改名，无变化时保持原引用
+        setAliases((prev) => unionAliasTables(prev, p.aliases));
         setPreview(p);
         setError(null);
       } catch (e) {
@@ -81,7 +86,7 @@ export default function App() {
     return () => {
       if (previewTimer.current) clearTimeout(previewTimer.current);
     };
-  }, [vtt, rules, revertedKeys, hydrated]);
+  }, [vtt, rules, revertedKeys, aliases, hydrated]);
 
   /* ------------- 防抖自动保存（800ms），刷新可恢复 ------------- */
   useEffect(() => {
@@ -90,7 +95,7 @@ export default function App() {
     setSaveState('saving');
     saveTimer.current = setTimeout(async () => {
       try {
-        const { job } = await api.saveJob(vtt, rules, revertedKeys);
+        const { job } = await api.saveJob(vtt, rules, revertedKeys, aliases);
         setUpdatedAt(job.updatedAt);
         setSaveState('saved');
       } catch {
@@ -100,7 +105,7 @@ export default function App() {
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
-  }, [vtt, rules, revertedKeys, hydrated]);
+  }, [vtt, rules, revertedKeys, aliases, hydrated]);
 
   /* ------------- 撤销 / 应用 ------------- */
   const toggleHit = useCallback(
@@ -117,6 +122,14 @@ export default function App() {
   }, [preview]);
   const applyAll = useCallback(() => setRevertedKeys([]), []);
 
+  /* 手动改名：更新映射表，预览防抖会立即联动所有未撤销命中 */
+  const renameAlias = useCallback((entityKey: string, alias: string) => {
+    setAliases((t) => ({
+      ...t,
+      entries: t.entries.map((e) => (e.entityKey === entityKey ? { ...e, alias } : e)),
+    }));
+  }, []);
+
   /* 规则变更后，清除已不存在的撤销项（key 由 cue 序号+区间+规则决定，天然稳定） */
   useEffect(() => {
     if (!preview) return;
@@ -128,7 +141,8 @@ export default function App() {
   const doExport = async () => {
     if (!vtt.trim()) return;
     try {
-      const result = await api.export(vtt, rules, revertedKeys);
+      const result = await api.export(vtt, rules, revertedKeys, aliases);
+      setAliases((prev) => unionAliasTables(prev, result.aliases));
       setExportData(result);
     } catch (e) {
       setError(`导出失败：${(e as Error).message}`);
@@ -177,6 +191,14 @@ export default function App() {
             onClear={() => setVtt('')}
           />
           <RulesPanel rules={rules} presets={presets} onChange={setRules} />
+          {(rules.some((r) => r.mode === 'alias') || aliases.entries.length > 0) && (
+            <AliasPanel
+              table={aliases}
+              rules={rules}
+              preview={preview}
+              onRename={renameAlias}
+            />
+          )}
         </div>
         <div className="col col-right">
           <Preview

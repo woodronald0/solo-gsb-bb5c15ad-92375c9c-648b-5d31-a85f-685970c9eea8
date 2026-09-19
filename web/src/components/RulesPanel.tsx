@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { MaskRule, Preset } from '../types';
+import type { MaskRule, Preset, ReplaceMode } from '../types';
 import { uid, validateRegex } from '../utils';
 
 interface Props {
@@ -21,6 +21,7 @@ export function RulesPanel({ rules, presets, onChange }: Props) {
       pattern: '',
       flags: 'g',
       replacement: '***',
+      mode: 'template',
       priority: 10,
       enabled: true,
     };
@@ -66,7 +67,8 @@ export function RulesPanel({ rules, presets, onChange }: Props) {
       <p className="hint">
         数值越大优先级越高；重叠命中由高优先级（同优先级取更长匹配）吞并，被吞并项仅进入审计。
         替换支持 <code>$1</code>、<code>$&amp;</code>、<code>$KEEP:3</code>、
-        <code>$MASKALL</code>、<code>$RULE</code>。
+        <code>$MASKALL</code>、<code>$RULE</code>；或切换为「稳定化名」模式，
+        让同一实体全片统一为「前缀+序号」化名。
       </p>
 
       <ul className="rule-list">
@@ -74,6 +76,7 @@ export function RulesPanel({ rules, presets, onChange }: Props) {
         {rules.map((r) => {
           const err = r.enabled ? validateRegex(r.pattern, r.flags) : null;
           const open = openId === r.id;
+          const mode = r.mode ?? 'template';
           return (
             <li key={r.id} className={`rule-item ${r.enabled ? '' : 'disabled'}`}>
               <div className="rule-row">
@@ -88,6 +91,11 @@ export function RulesPanel({ rules, presets, onChange }: Props) {
                     {r.priority}
                   </span>
                   {r.name}
+                  {mode === 'alias' && (
+                    <span className="mode-badge" title="稳定化名模式：同一实体全片同一编号化名">
+                      化名
+                    </span>
+                  )}
                   {err && <span className="rule-err-dot" title={err}>!</span>}
                   <span className="caret">{open ? '▾' : '▸'}</span>
                 </button>
@@ -133,13 +141,40 @@ export function RulesPanel({ rules, presets, onChange }: Props) {
                     </label>
                   </div>
                   <label>
-                    替换模板
-                    <input
-                      className="mono"
-                      value={r.replacement}
-                      onChange={(e) => update(r.id, { replacement: e.target.value })}
-                    />
+                    替换模式
+                    <select
+                      value={mode}
+                      onChange={(e) => update(r.id, { mode: e.target.value as ReplaceMode })}
+                    >
+                      <option value="template">固定模板</option>
+                      <option value="alias">稳定化名</option>
+                    </select>
                   </label>
+                  {mode === 'alias' ? (
+                    <>
+                      <label>
+                        化名前缀（自动命名为「前缀+序号」，如 用户1）
+                        <input
+                          value={r.aliasPrefix ?? ''}
+                          placeholder="用户"
+                          onChange={(e) => update(r.id, { aliasPrefix: e.target.value })}
+                        />
+                      </label>
+                      <p className="hint">
+                        同一实体（NFKC 规范化原文）跨字幕共享同一编号化名，编号持久不重排；
+                        命中后可在下方「化名表」中手动改名。
+                      </p>
+                    </>
+                  ) : (
+                    <label>
+                      替换模板
+                      <input
+                        className="mono"
+                        value={r.replacement}
+                        onChange={(e) => update(r.id, { replacement: e.target.value })}
+                      />
+                    </label>
+                  )}
                 </div>
               )}
             </li>

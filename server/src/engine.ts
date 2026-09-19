@@ -1,6 +1,8 @@
 import { createHash } from 'crypto';
 import { parseVtt, serializeVtt } from './vtt';
 import type {
+  AliasEntry,
+  AliasTable,
   AuditRecord,
   AuditReport,
   CueHit,
@@ -10,6 +12,67 @@ import type {
   PreviewResult,
   SuppressedHit,
 } from './types';
+
+/* ------------------------------------------------------------------ */
+/* 稳定化名映射                                                         */
+/* ------------------------------------------------------------------ */
+
+export const DEFAULT_ALIAS_PREFIX = '用户';
+
+export function emptyAliasTable(): AliasTable {
+  return { nextSeq: {}, entries: [] };
+}
+
+/** 实体归一化：Unicode NFKC + 去首尾空白（全角/半角、首尾空格视为同一实体） */
+export function normalizeEntity(text: string): string {
+  return text.normalize('NFKC').trim();
+}
+
+/** 实体键：规则 ID + 归一化原文 */
+export function entityKeyOf(ruleId: string, normalizedSource: string): string {
+  return `${ruleId}:${normalizedSource}`;
+}
+
+function cloneAliasTable(table?: AliasTable): AliasTable {
+  if (!table || !Array.isArray(table.entries)) return emptyAliasTable();
+  return {
+    nextSeq: { ...(table.nextSeq ?? {}) },
+    entries: table.entries.map((e) => ({ ...e })),
+  };
+}
+
+/**
+ * 查找或建立实体映射：首次命中时按规则内自增序号分配「前缀+序号」化名。
+ * 只追加、不改写已有条目，因此增删字幕不会重排已有编号。
+ */
+function resolveAliasEntry(
+  table: AliasTable,
+  rule: MaskRule,
+  normalizedSource: string,
+): AliasEntry {
+  const key = entityKeyOf(rule.id, normalizedSource);
+  const found = table.entries.find((e) => e.entityKey === key);
+  if (found) return found;
+  const seq = table.nextSeq[rule.id] ?? 1;
+  table.nextSeq[rule.id] = seq + 1;
+  const prefix = (rule.aliasPrefix ?? '').trim() || DEFAULT_ALIAS_PREFIX;
+  const entry: AliasEntry = {
+    entityKey: key,
+    ruleId: rule.id,
+    source: normalizedSource,
+    seq,
+    alias: `${prefix}${seq}`,
+  };
+  table.entries.push(entry);
+  return entry;
+}
+
+/** 最终生效化名：手动改名为空时回退为「当前前缀+序号」 */
+function finalAliasOf(entry: AliasEntry, rule?: MaskRule): string {
+  if (entry.alias.trim()) return entry.alias;
+  const prefix = (rule?.aliasPrefix ?? '').trim() || DEFAULT_ALIAS_PREFIX;
+  return `${prefix}${entry.seq}`;
+}
 
 /* ------------------------------------------------------------------ */
 /* 规则编译                                                            */
@@ -190,12 +253,17 @@ export function buildPreview(input: {
   vtt: string;
   rules: MaskRule[];
   revertedKeys?: string[];
+  aliases?: AliasTable;
 }): PreviewResult {
   const parsed = parseVtt(input.vtt);
   const { compiled, errors } = compileRules(input.rules);
   for (const e of errors) parsed.errors.push(`规则 ${e.ruleId} 正则无效：${e.message}`);
 
   const reverted = new Set(input.revertedKeys ?? []);
+  const aliasTable = cloneAliasTable(input.aliases);
+  const aliasRules = new Map(
+    input.rules.filter((r) => r.mode === 'alias').map((r) => [r.id, r]),
+  );
   const cues: CueHit[] = [];
   let totalHits = 0;
   let appliedHits = 0;
@@ -223,7 +291,9 @@ export function buildPreview(input: {
           start: m.index,
           end: m.index + matched.length,
           match: matched,
-          replacement: applyTemplate(rule.replacement, matched, rule.name, m),
+          // 化名模式的替换结果在合并后按实体映射生成
+          replacement:
+            rule.mode === 'alias' ? '' : applyTemplate(rule.replacement, matched, rule.name, m),
         });
       }
     }
@@ -237,6 +307,17 @@ export function buildPreview(input: {
       const isReverted = reverted.has(key);
       if (isReverted) revertedHits++;
       else appliedHits++;
+
+      // 稳定化名：按归一化实体建/查持久映射，同一实体跨 cue 同号
+      let replacement = h.replacement;
+      let entityKey: string | undefined;
+      const aliasRule = aliasRules.get(h.ruleId);
+      if (aliasRule) {
+        const entry = resolveAliasEntry(aliasTable, aliasRule, normalizeEntity(h.match));
+        replacement = finalAliasOf(entry, aliasRule);
+        entityKey = entry.entityKey;
+      }
+
       return {
         key,
         ruleId: h.ruleId,
@@ -245,7 +326,8 @@ export function buildPreview(input: {
         start: h.start,
         end: h.end - 1,
         match: h.match,
-        replacement: h.replacement,
+        replacement,
+        entityKey,
         reverted: isReverted,
       };
     });
@@ -271,6 +353,7 @@ export function buildPreview(input: {
     suppressedHits,
     cues,
     parseErrors: parsed.errors,
+    aliases: aliasTable,
   };
 }
 
@@ -298,6 +381,7 @@ export function exportResult(input: {
   vtt: string;
   rules: MaskRule[];
   revertedKeys?: string[];
+  aliases?: AliasTable;
   jobId?: string;
 }): ExportResult {
   const preview = buildPreview(input);
@@ -308,10 +392,15 @@ export function exportResult(input: {
   }
   const newVtt = serializeVtt(parsed, payloadByIndex);
 
+  const aliasRules = new Map(
+    input.rules.filter((r) => r.mode === 'alias').map((r) => [r.id, r]),
+  );
+  const entryByKey = new Map(preview.aliases.entries.map((e) => [e.entityKey, e]));
+
   const records: AuditRecord[] = [];
   for (const cue of preview.cues) {
     for (const h of cue.hits) {
-      records.push({
+      const record: AuditRecord = {
         cueIndex: cue.index,
         cueId: cue.id,
         time: { start: cue.start, end: cue.end },
@@ -319,10 +408,15 @@ export function exportResult(input: {
         source: { start: h.start, end: h.end, text: h.match },
         replacement: h.replacement,
         status: h.reverted ? 'reverted' : 'applied',
-      });
+      };
+      if (h.entityKey) {
+        record.entityKey = h.entityKey;
+        record.alias = h.replacement;
+      }
+      records.push(record);
     }
     for (const s of cue.suppressed) {
-      records.push({
+      const record: AuditRecord = {
         cueIndex: cue.index,
         cueId: cue.id,
         time: { start: cue.start, end: cue.end },
@@ -331,14 +425,23 @@ export function exportResult(input: {
         replacement: '',
         status: 'suppressed',
         suppressedBy: { id: s.winnerRuleId, name: s.winnerRuleName },
-      });
+      };
+      // 被抑制命中不分配新编号，但实体已存在时记录其化名便于审计
+      const aliasRule = aliasRules.get(s.ruleId);
+      if (aliasRule) {
+        const key = entityKeyOf(aliasRule.id, normalizeEntity(s.match));
+        record.entityKey = key;
+        const entry = entryByKey.get(key);
+        if (entry) record.alias = finalAliasOf(entry, aliasRule);
+      }
+      records.push(record);
     }
   }
 
   const sha256 = createHash('sha256').update(input.vtt, 'utf8').digest('hex');
   const audit: AuditReport = {
     app: 'subtitle-mask-console',
-    version: 1,
+    version: 2,
     generatedAt: new Date().toISOString(),
     source: {
       sha256,
@@ -346,6 +449,7 @@ export function exportResult(input: {
       cueCount: preview.cueCount,
     },
     rules: input.rules,
+    aliases: preview.aliases.entries,
     stats: {
       totalHits: preview.totalHits,
       appliedHits: preview.appliedHits,
@@ -359,5 +463,6 @@ export function exportResult(input: {
     vtt: newVtt,
     audit,
     jobId: input.jobId ?? '',
+    aliases: preview.aliases,
   };
 }

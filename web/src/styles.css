@@ -352,6 +352,72 @@ select:focus {
   font-size: 12px;
 }
 
+.mode-badge {
+  background: var(--suppressed-bg);
+  color: var(--suppressed);
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+}
+
+/* ---------------- 化名表 ---------------- */
+.alias-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.alias-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: #fcfdff;
+}
+.alias-row.alias-inactive {
+  opacity: 0.55;
+}
+
+.alias-seq {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  min-width: 30px;
+  text-align: right;
+}
+
+.alias-input {
+  flex: 0 0 130px;
+  font-weight: 600;
+}
+
+.alias-source {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.alias-rule {
+  font-size: 11px;
+  background: #f1f5f9;
+  border-radius: 8px;
+  padding: 1px 8px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 .empty-tip {
   color: var(--muted);
   padding: 16px;

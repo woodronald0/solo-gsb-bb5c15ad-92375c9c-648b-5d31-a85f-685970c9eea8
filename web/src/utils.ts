@@ -1,3 +1,5 @@
+import type { AliasTable } from './types';
+
 export function uid(prefix = 'rule'): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -11,6 +13,31 @@ export function validateRegex(pattern: string, flags: string): string | null {
   } catch (e) {
     return (e as Error).message;
   }
+}
+
+export function emptyAliasTable(): AliasTable {
+  return { nextSeq: {}, entries: [] };
+}
+
+/**
+ * 将服务端返回的化名表并入本地表：
+ * 只追加新实体、序号取大，保留本地已有条目（含手动改名）。
+ * 无变化时返回原引用，避免触发多余渲染。
+ */
+export function unionAliasTables(prev: AliasTable, next: AliasTable): AliasTable {
+  if (!next || !Array.isArray(next.entries)) return prev;
+  const known = new Set(prev.entries.map((e) => e.entityKey));
+  const added = next.entries.filter((e) => !known.has(e.entityKey));
+  const nextSeq = { ...prev.nextSeq };
+  let seqChanged = false;
+  for (const [k, v] of Object.entries(next.nextSeq ?? {})) {
+    if ((nextSeq[k] ?? 0) < v) {
+      nextSeq[k] = v;
+      seqChanged = true;
+    }
+  }
+  if (added.length === 0 && !seqChanged) return prev;
+  return { nextSeq, entries: [...prev.entries, ...added] };
 }
 
 export function download(filename: string, content: string, mime: string): void {

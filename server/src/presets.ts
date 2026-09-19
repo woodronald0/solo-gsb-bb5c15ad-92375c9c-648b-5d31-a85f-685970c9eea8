@@ -10,6 +10,7 @@ export interface Preset {
  * 内置脱敏规则预设（可在此基础上编辑/增删）。
  * 替换模板支持：$1/$2 捕获组、$& 整体命中、$<name> 命名组、
  * $KEEP:n（保留前 n 字其余打码）、$MASK:n、$MASKALL、$RULE。
+ * mode 为 alias 时启用稳定化名：同一实体跨字幕共享「前缀+序号」化名。
  */
 export const PRESETS: Preset[] = [
   {
@@ -95,6 +96,21 @@ export const PRESETS: Preset[] = [
       replacement: '$KEEP:1',
       priority: 20,
       enabled: true,
+    },
+  },
+  {
+    name: '稳定化名·姓名',
+    description: '同一姓名全片统一为「用户N」编号化名，可在化名表中手动改名',
+    rule: {
+      name: '姓名化名',
+      pattern:
+        '[张王李赵刘陈杨黄周吴徐孙胡朱高林何郭马罗梁宋郑谢韩唐冯于董萧程曹袁邓许傅沈曾彭吕苏卢蒋蔡贾丁魏薛叶阎余潘杜戴夏钟汪田任姜范方石姚谭廖邹熊金陆郝孔白崔康毛邱秦江史顾侯邵孟龙万段雷钱汤尹黎易常武乔贺赖龚文][一-龥]{1,2}(?=先生|女士|老师|经理|医生|同志)',
+      flags: 'g',
+      replacement: '',
+      mode: 'alias',
+      aliasPrefix: '用户',
+      priority: 20,
+      enabled: false,
     },
   },
 ];
