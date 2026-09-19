@@ -22,6 +22,8 @@ export const PRESETS: Preset[] = [
       replacement: '$1****$2',
       priority: 50,
       enabled: true,
+      mode: 'template',
+      aliasPrefix: '号码',
     },
   },
   {
@@ -34,6 +36,8 @@ export const PRESETS: Preset[] = [
       replacement: '$MASKALL',
       priority: 40,
       enabled: false,
+      mode: 'template',
+      aliasPrefix: '号码',
     },
   },
   {
@@ -46,6 +50,8 @@ export const PRESETS: Preset[] = [
       replacement: '****@$2',
       priority: 60,
       enabled: true,
+      mode: 'template',
+      aliasPrefix: '邮箱',
     },
   },
   {
@@ -58,6 +64,8 @@ export const PRESETS: Preset[] = [
       replacement: '$1********$2',
       priority: 80,
       enabled: true,
+      mode: 'template',
+      aliasPrefix: '证件',
     },
   },
   {
@@ -70,6 +78,8 @@ export const PRESETS: Preset[] = [
       replacement: '$1********$2',
       priority: 75,
       enabled: true,
+      mode: 'template',
+      aliasPrefix: '卡号',
     },
   },
   {
@@ -82,6 +92,8 @@ export const PRESETS: Preset[] = [
       replacement: '[链接已脱敏]',
       priority: 30,
       enabled: false,
+      mode: 'template',
+      aliasPrefix: '链接',
     },
   },
   {
@@ -95,6 +107,24 @@ export const PRESETS: Preset[] = [
       replacement: '$KEEP:1',
       priority: 20,
       enabled: true,
+      mode: 'template',
+      aliasPrefix: '人物',
+    },
+  },
+  {
+    name: '称谓前姓名（稳定化名模式）',
+    description:
+      '同一人跨 cue 始终替换为同一编号化名（默认「人物1、人物2」，可改前缀、可在化名表手动改名）；增删字幕不重排编号',
+    rule: {
+      name: '姓名-稳定化名',
+      pattern:
+        '[张王李赵刘陈杨黄周吴徐孙胡朱高林何郭马罗梁宋郑谢韩唐冯于董萧程曹袁邓许傅沈曾彭吕苏卢蒋蔡贾丁魏薛叶阎余潘杜戴夏钟汪田任姜范方石姚谭廖邹熊金陆郝孔白崔康毛邱秦江史顾侯邵孟龙万段雷钱汤尹黎易常武乔贺赖龚文][一-龥]{1,2}(?=先生|女士|老师|经理|医生|同志)',
+      flags: 'g',
+      replacement: '',
+      priority: 20,
+      enabled: false,
+      mode: 'alias',
+      aliasPrefix: '人物',
     },
   },
 ];

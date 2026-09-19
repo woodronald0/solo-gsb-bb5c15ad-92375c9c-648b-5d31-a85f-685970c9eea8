@@ -23,6 +23,8 @@ export function RulesPanel({ rules, presets, onChange }: Props) {
       replacement: '***',
       priority: 10,
       enabled: true,
+      mode: 'template',
+      aliasPrefix: '化名',
     };
     onChange([...rules, r]);
     setOpenId(r.id);
@@ -65,8 +67,9 @@ export function RulesPanel({ rules, presets, onChange }: Props) {
 
       <p className="hint">
         数值越大优先级越高；重叠命中由高优先级（同优先级取更长匹配）吞并，被吞并项仅进入审计。
-        替换支持 <code>$1</code>、<code>$&amp;</code>、<code>$KEEP:3</code>、
-        <code>$MASKALL</code>、<code>$RULE</code>。
+        模板替换支持 <code>$1</code>、<code>$&amp;</code>、<code>$KEEP:3</code>、
+        <code>$MASKALL</code>、<code>$RULE</code>；切到「稳定化名」后同一实体跨 cue
+        使用同一编号化名（NFKC 归一 + 去空白建键），增删字幕不重排编号，可在下方化名表改名。
       </p>
 
       <ul className="rule-list">
@@ -88,6 +91,11 @@ export function RulesPanel({ rules, presets, onChange }: Props) {
                     {r.priority}
                   </span>
                   {r.name}
+                  {r.mode === 'alias' && (
+                    <span className="mode-badge mode-alias" title="稳定化名模式">
+                      化名
+                    </span>
+                  )}
                   {err && <span className="rule-err-dot" title={err}>!</span>}
                   <span className="caret">{open ? '▾' : '▸'}</span>
                 </button>
@@ -132,14 +140,47 @@ export function RulesPanel({ rules, presets, onChange }: Props) {
                       />
                     </label>
                   </div>
-                  <label>
-                    替换模板
-                    <input
-                      className="mono"
-                      value={r.replacement}
-                      onChange={(e) => update(r.id, { replacement: e.target.value })}
-                    />
-                  </label>
+                  <div className="rule-mode">
+                    <span className="field-label">替换模式</span>
+                    <label className={`mode-option ${r.mode === 'template' ? 'active' : ''}`}>
+                      <input
+                        type="radio"
+                        name={`mode-${r.id}`}
+                        checked={r.mode === 'template'}
+                        onChange={() => update(r.id, { mode: 'template' })}
+                      />
+                      固定模板
+                    </label>
+                    <label className={`mode-option ${r.mode === 'alias' ? 'active' : ''}`}>
+                      <input
+                        type="radio"
+                        name={`mode-${r.id}`}
+                        checked={r.mode === 'alias'}
+                        onChange={() => update(r.id, { mode: 'alias' })}
+                      />
+                      稳定化名
+                    </label>
+                  </div>
+                  {r.mode === 'alias' ? (
+                    <label>
+                      化名前缀（编号化名 = 前缀 + 序号，留空为「化名」）
+                      <input
+                        className="mono"
+                        value={r.aliasPrefix}
+                        placeholder="如：人物 / 机构 / 地点"
+                        onChange={(e) => update(r.id, { aliasPrefix: e.target.value })}
+                      />
+                    </label>
+                  ) : (
+                    <label>
+                      替换模板
+                      <input
+                        className="mono"
+                        value={r.replacement}
+                        onChange={(e) => update(r.id, { replacement: e.target.value })}
+                      />
+                    </label>
+                  )}
                 </div>
               )}
             </li>

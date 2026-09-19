@@ -19,7 +19,9 @@ export class JobStore {
     await fs.mkdir(path.dirname(this.filePath), { recursive: true });
     try {
       const raw = await fs.readFile(this.filePath, 'utf8');
-      this.cache = JSON.parse(raw) as JobState;
+      const parsed = JSON.parse(raw) as JobState;
+      // 兼容旧版本任务文件：补齐稳定化名表
+      this.cache = { ...parsed, aliases: parsed.aliases ?? [], revertedKeys: parsed.revertedKeys ?? [] };
     } catch {
       this.cache = null;
     }

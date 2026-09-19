@@ -1,5 +1,16 @@
+import type { MaskRule } from './types';
+
 export function uid(prefix = 'rule'): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** 兼容旧版本规则：补齐稳定化名所需字段 */
+export function normalizeRule(rule: MaskRule): MaskRule {
+  return {
+    ...rule,
+    mode: rule.mode === 'alias' ? 'alias' : 'template',
+    aliasPrefix: typeof rule.aliasPrefix === 'string' ? rule.aliasPrefix : '',
+  };
 }
 
 /** 校验正则源码与标志，返回错误文案或 null */

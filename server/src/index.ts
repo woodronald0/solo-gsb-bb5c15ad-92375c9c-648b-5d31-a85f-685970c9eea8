@@ -1,10 +1,10 @@
 import express, { type Request, type Response } from 'express';
 import path from 'path';
 import { randomUUID } from 'crypto';
-import { buildPreview, exportResult } from './engine';
+import { buildPreview, exportResult, normalizeRule } from './engine';
 import { PRESETS } from './presets';
 import { JobStore } from './store';
-import type { JobState, MaskRule, PreviewInput } from './types';
+import type { AliasEntry, JobState, MaskRule, PreviewInput } from './types';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const DATA_DIR = process.env.DATA_DIR ?? path.join(process.cwd(), 'data');
@@ -20,6 +20,7 @@ const store = new JobStore(DATA_DIR);
 
 function validateRules(rules: unknown): MaskRule[] | string {
   if (!Array.isArray(rules)) return 'rules 必须是数组';
+  const out: MaskRule[] = [];
   for (const r of rules) {
     if (r === null || typeof r !== 'object') return '存在非法规则';
     const rule = r as Record<string, unknown>;
@@ -31,28 +32,64 @@ function validateRules(rules: unknown): MaskRule[] | string {
     if (typeof rule.flags !== 'string') return `规则 ${rule.id} flags 必须是字符串`;
     if (typeof rule.priority !== 'number') return `规则 ${rule.id} 优先级必须是数字`;
     if (typeof rule.enabled !== 'boolean') return `规则 ${rule.id} enabled 必须是布尔值`;
+    if (rule.mode !== undefined && rule.mode !== 'template' && rule.mode !== 'alias')
+      return `规则 ${rule.id} 替换模式非法`;
+    if (rule.aliasPrefix !== undefined && typeof rule.aliasPrefix !== 'string')
+      return `规则 ${rule.id} 化名前缀必须是字符串`;
+    const normalized = normalizeRule(rule as unknown as MaskRule);
     try {
-      new RegExp(rule.pattern as string, rule.flags as string);
+      new RegExp(normalized.pattern, normalized.flags);
     } catch (e) {
-      return `规则「${rule.name}」正则无效：${(e as Error).message}`;
+      return `规则「${normalized.name}」正则无效：${(e as Error).message}`;
     }
+    out.push(normalized);
   }
-  return rules as MaskRule[];
+  return out;
+}
+
+/** 校验并净化化名表；非法时返回错误文案 */
+function validateAliases(aliases: unknown): AliasEntry[] | string {
+  if (aliases === undefined || aliases === null) return [];
+  if (!Array.isArray(aliases)) return 'aliases 必须是数组';
+  const out: AliasEntry[] = [];
+  for (const a of aliases) {
+    if (a === null || typeof a !== 'object') return '存在非法化名条目';
+    const e = a as Record<string, unknown>;
+    if (typeof e.ruleId !== 'string' || !e.ruleId) return '化名条目缺少 ruleId';
+    if (typeof e.entityKey !== 'string' || !e.entityKey)
+      return '化名条目缺少 entityKey';
+    if (typeof e.seq !== 'number' || !Number.isInteger(e.seq) || e.seq < 1)
+      return `实体 ${e.entityKey} 编号非法`;
+    if (typeof e.alias !== 'string' || !e.alias.trim())
+      return `实体 ${e.entityKey} 化名为空`;
+    out.push({
+      ruleId: e.ruleId,
+      entityKey: e.entityKey,
+      seq: e.seq,
+      alias: e.alias,
+      auto: e.auto !== false,
+      sourceText: typeof e.sourceText === 'string' ? e.sourceText : undefined,
+    });
+  }
+  return out;
 }
 
 function readPreviewBody(req: Request): PreviewInput {
-  const { vtt, rules, revertedKeys } = req.body as Partial<PreviewInput>;
+  const { vtt, rules, revertedKeys, aliases } = req.body as Partial<PreviewInput>;
   if (typeof vtt !== 'string') {
     throw new Error('vtt 必须是字符串');
   }
   const checked = validateRules(rules);
   if (typeof checked === 'string') throw new Error(checked);
+  const checkedAliases = validateAliases(aliases);
+  if (typeof checkedAliases === 'string') throw new Error(checkedAliases);
   return {
     vtt,
     rules: checked,
     revertedKeys: Array.isArray(revertedKeys)
       ? (revertedKeys as string[]).filter((k) => typeof k === 'string')
       : [],
+    aliases: checkedAliases,
   };
 }
 
@@ -73,12 +110,15 @@ app.get('/api/job', (_req, res) => {
 
 /** 自动保存编辑中的任务 */
 app.put('/api/job', (req, res) => {
-  const { vtt, rules, revertedKeys } = req.body as Partial<JobState>;
+  const { vtt, rules, revertedKeys, aliases } = req.body as Partial<JobState>;
   if (typeof vtt !== 'string') return res.status(400).json({ error: 'vtt 必须是字符串' });
   const checked = validateRules(rules);
   if (typeof checked === 'string') return res.status(400).json({ error: checked });
   if (!Array.isArray(revertedKeys))
     return res.status(400).json({ error: 'revertedKeys 必须是数组' });
+  const checkedAliases = validateAliases(aliases);
+  if (typeof checkedAliases === 'string')
+    return res.status(400).json({ error: checkedAliases });
 
   const previous = store.get();
   const state: JobState = {
@@ -86,6 +126,7 @@ app.put('/api/job', (req, res) => {
     vtt,
     rules: checked,
     revertedKeys: revertedKeys.filter((k) => typeof k === 'string'),
+    aliases: checkedAliases,
     updatedAt: new Date().toISOString(),
   };
   store.save(state);

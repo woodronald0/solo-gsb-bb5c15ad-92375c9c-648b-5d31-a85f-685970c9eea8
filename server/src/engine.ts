@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 import { parseVtt, serializeVtt } from './vtt';
 import type {
+  AliasEntry,
   AuditRecord,
   AuditReport,
   CueHit,
@@ -12,8 +13,41 @@ import type {
 } from './types';
 
 /* ------------------------------------------------------------------ */
-/* 规则编译                                                            */
+/* 规则兼容与编译                                                       */
 /* ------------------------------------------------------------------ */
+
+/** 兼容旧版本规则：补齐 mode / aliasPrefix，并规整非法值 */
+export function normalizeRule(rule: MaskRule): MaskRule {
+  return {
+    ...rule,
+    mode: rule.mode === 'alias' ? 'alias' : 'template',
+    aliasPrefix: typeof rule.aliasPrefix === 'string' ? rule.aliasPrefix : '',
+  };
+}
+
+/** 化名模式缺省前缀（用户未填前缀时使用） */
+export const DEFAULT_ALIAS_PREFIX = '化名';
+
+export function aliasPrefixOf(rule: MaskRule): string {
+  return rule.aliasPrefix.trim() || DEFAULT_ALIAS_PREFIX;
+}
+
+/** 自动化名：前缀 + 规则内稳定序号 */
+export function autoAliasFor(prefix: string, seq: number): string {
+  return `${prefix}${seq}`;
+}
+
+/**
+ * 实体键规范化：Unicode NFKC 归一化（全角/兼容字符收敛）后去首尾空白。
+ * 同一实体跨 cue、跨全半角写法均收敛到同一键。
+ */
+export function normalizeEntity(raw: string): string {
+  return raw.normalize('NFKC').trim();
+}
+
+export function aliasMapKey(ruleId: string, entityKey: string): string {
+  return `${ruleId} ${entityKey}`;
+}
 
 export interface CompiledRule {
   rule: MaskRule;
@@ -26,7 +60,8 @@ export function compileRules(rules: MaskRule[]): {
 } {
   const compiled: CompiledRule[] = [];
   const errors: { ruleId: string; message: string }[] = [];
-  for (const rule of rules) {
+  for (const rawRule of rules) {
+    const rule = normalizeRule(rawRule);
     if (!rule.enabled) continue;
     if (!rule.pattern) continue;
     try {
@@ -144,6 +179,8 @@ interface RawHit {
   end: number; // 不含
   match: string;
   replacement: string;
+  /** 化名规则的实体键；模板规则为 undefined */
+  entityKey?: string;
 }
 
 function hitKey(cueIndex: number, start: string, h: RawHit): string {
@@ -173,6 +210,7 @@ function mergeHits(raw: RawHit[]): { kept: RawHit[]; suppressed: SuppressedHit[]
         reason: 'overlap',
         winnerRuleId: winner.ruleId,
         winnerRuleName: winner.ruleName,
+        entityKey: h.entityKey,
       });
     } else {
       kept.push(h);
@@ -190,17 +228,30 @@ export function buildPreview(input: {
   vtt: string;
   rules: MaskRule[];
   revertedKeys?: string[];
+  aliases?: AliasEntry[];
 }): PreviewResult {
   const parsed = parseVtt(input.vtt);
-  const { compiled, errors } = compileRules(input.rules);
+  const normalizedRules = input.rules.map(normalizeRule);
+  const { compiled, errors } = compileRules(normalizedRules);
   for (const e of errors) parsed.errors.push(`规则 ${e.ruleId} 正则无效：${e.message}`);
 
+  const ruleById = new Map(normalizedRules.map((r) => [r.id, r]));
   const reverted = new Set(input.revertedKeys ?? []);
+
+  /* ---------- 化名状态：载入已持久映射，序号只增不复用 ---------- */
+  const aliases: AliasEntry[] = (input.aliases ?? []).map((a) => ({ ...a }));
+  const aliasByKey = new Map<string, AliasEntry>();
+  const seqByRule = new Map<string, number>();
+  for (const a of aliases) {
+    aliasByKey.set(aliasMapKey(a.ruleId, a.entityKey), a);
+    seqByRule.set(a.ruleId, Math.max(seqByRule.get(a.ruleId) ?? 0, a.seq));
+  }
+
+  /* ---------- 第一遍：扫描 + 优先级合并（暂不解析化名） ---------- */
   const cues: CueHit[] = [];
-  let totalHits = 0;
-  let appliedHits = 0;
-  let revertedHits = 0;
   let suppressedHits = 0;
+  /** 每条 cue 合并后的原始命中，保留 cue 顺序供编号分配 */
+  const mergedByCue: { index: number; kept: RawHit[] }[] = [];
 
   for (const cue of parsed.cues) {
     const { text, map } = plainText(cue.payload);
@@ -216,6 +267,7 @@ export function buildPreview(input: {
           regex.lastIndex++;
           continue;
         }
+        const isAlias = rule.mode === 'alias';
         raw.push({
           ruleId: rule.id,
           ruleName: rule.name,
@@ -223,20 +275,73 @@ export function buildPreview(input: {
           start: m.index,
           end: m.index + matched.length,
           match: matched,
-          replacement: applyTemplate(rule.replacement, matched, rule.name, m),
+          replacement: isAlias ? '' : applyTemplate(rule.replacement, matched, rule.name, m),
+          entityKey: isAlias ? normalizeEntity(matched) : undefined,
         });
       }
     }
 
     const { kept, suppressed } = mergeHits(raw);
     suppressedHits += suppressed.length;
-    totalHits += kept.length;
+    mergedByCue.push({ index: cue.index, kept });
 
+    cues.push({
+      index: cue.index,
+      id: cue.id,
+      start: cue.start,
+      end: cue.end,
+      payload: cue.payload,
+      map,
+      text,
+      hits: [],
+      suppressed,
+    });
+  }
+
+  /* ---------- 第二遍：按 cue 顺序 / 文本位置首次命中分配持久化名 ---------- */
+  let totalHits = 0;
+  let appliedHits = 0;
+  let revertedHits = 0;
+
+  const cueByIndex = new Map(cues.map((c) => [c.index, c]));
+  for (const { index, kept } of mergedByCue) {
+    const cue = cueByIndex.get(index)!;
     const hits: Hit[] = kept.map((h) => {
+      let aliasName: string | undefined;
+      const rule = ruleById.get(h.ruleId);
+      if (rule?.mode === 'alias' && h.entityKey !== undefined) {
+        const mapKey = aliasMapKey(h.ruleId, h.entityKey);
+        let entry = aliasByKey.get(mapKey);
+        if (!entry) {
+          // 首次命中：分配规则内稳定编号（后续 cue / 重排均不复用）
+          const seq = (seqByRule.get(h.ruleId) ?? 0) + 1;
+          seqByRule.set(h.ruleId, seq);
+          entry = {
+            ruleId: h.ruleId,
+            entityKey: h.entityKey,
+            seq,
+            alias: autoAliasFor(aliasPrefixOf(rule), seq),
+            auto: true,
+            sourceText: h.match,
+          };
+          aliasByKey.set(mapKey, entry);
+          aliases.push(entry);
+        } else {
+          entry.sourceText = h.match;
+          if (entry.auto) {
+            // 前缀调整联动所有自动化名；手动改名不受影响
+            entry.alias = autoAliasFor(aliasPrefixOf(rule), entry.seq);
+          }
+        }
+        h.replacement = entry.alias;
+        aliasName = entry.alias;
+      }
+
       const key = hitKey(cue.index, cue.start, h);
       const isReverted = reverted.has(key);
       if (isReverted) revertedHits++;
       else appliedHits++;
+      totalHits++;
       return {
         key,
         ruleId: h.ruleId,
@@ -247,20 +352,11 @@ export function buildPreview(input: {
         match: h.match,
         replacement: h.replacement,
         reverted: isReverted,
+        entityKey: h.entityKey,
+        alias: aliasName,
       };
     });
-
-    cues.push({
-      index: cue.index,
-      id: cue.id,
-      start: cue.start,
-      end: cue.end,
-      payload: cue.payload,
-      map,
-      text,
-      hits,
-      suppressed,
-    });
+    cue.hits = hits;
   }
 
   return {
@@ -271,6 +367,7 @@ export function buildPreview(input: {
     suppressedHits,
     cues,
     parseErrors: parsed.errors,
+    aliases,
   };
 }
 
@@ -298,6 +395,7 @@ export function exportResult(input: {
   vtt: string;
   rules: MaskRule[];
   revertedKeys?: string[];
+  aliases?: AliasEntry[];
   jobId?: string;
 }): ExportResult {
   const preview = buildPreview(input);
@@ -319,6 +417,8 @@ export function exportResult(input: {
         source: { start: h.start, end: h.end, text: h.match },
         replacement: h.replacement,
         status: h.reverted ? 'reverted' : 'applied',
+        entityKey: h.entityKey,
+        alias: h.alias,
       });
     }
     for (const s of cue.suppressed) {
@@ -331,6 +431,7 @@ export function exportResult(input: {
         replacement: '',
         status: 'suppressed',
         suppressedBy: { id: s.winnerRuleId, name: s.winnerRuleName },
+        entityKey: s.entityKey,
       });
     }
   }
@@ -338,14 +439,14 @@ export function exportResult(input: {
   const sha256 = createHash('sha256').update(input.vtt, 'utf8').digest('hex');
   const audit: AuditReport = {
     app: 'subtitle-mask-console',
-    version: 1,
+    version: 2,
     generatedAt: new Date().toISOString(),
     source: {
       sha256,
       length: input.vtt.length,
       cueCount: preview.cueCount,
     },
-    rules: input.rules,
+    rules: input.rules.map(normalizeRule),
     stats: {
       totalHits: preview.totalHits,
       appliedHits: preview.appliedHits,
@@ -353,6 +454,7 @@ export function exportResult(input: {
       suppressedHits: preview.suppressedHits,
     },
     records,
+    aliases: preview.aliases,
   };
 
   return {

@@ -1,3 +1,5 @@
+export type RuleMode = 'template' | 'alias';
+
 export interface MaskRule {
   id: string;
   name: string;
@@ -6,6 +8,20 @@ export interface MaskRule {
   replacement: string;
   priority: number;
   enabled: boolean;
+  /** 替换模式：固定模板 / 稳定化名 */
+  mode: RuleMode;
+  /** 化名模式前缀 */
+  aliasPrefix: string;
+}
+
+/** 稳定化名映射条目（持久化，编号不复用） */
+export interface AliasEntry {
+  ruleId: string;
+  entityKey: string;
+  seq: number;
+  alias: string;
+  auto: boolean;
+  sourceText?: string;
 }
 
 export interface Hit {
@@ -18,6 +34,8 @@ export interface Hit {
   match: string;
   replacement: string;
   reverted: boolean;
+  entityKey?: string;
+  alias?: string;
 }
 
 export interface SuppressedHit {
@@ -30,6 +48,7 @@ export interface SuppressedHit {
   reason: 'overlap';
   winnerRuleId: string;
   winnerRuleName: string;
+  entityKey?: string;
 }
 
 export interface CueHit {
@@ -52,6 +71,7 @@ export interface PreviewResult {
   suppressedHits: number;
   cues: CueHit[];
   parseErrors: string[];
+  aliases: AliasEntry[];
 }
 
 export interface JobState {
@@ -59,6 +79,7 @@ export interface JobState {
   vtt: string;
   rules: MaskRule[];
   revertedKeys: string[];
+  aliases: AliasEntry[];
   updatedAt: string;
 }
 
@@ -71,6 +92,8 @@ export interface AuditRecord {
   replacement: string;
   status: 'applied' | 'reverted' | 'suppressed';
   suppressedBy?: { id: string; name: string };
+  entityKey?: string;
+  alias?: string;
 }
 
 export interface AuditReport {
@@ -86,6 +109,7 @@ export interface AuditReport {
     suppressedHits: number;
   };
   records: AuditRecord[];
+  aliases?: AliasEntry[];
 }
 
 export interface ExportResult {
